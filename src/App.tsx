@@ -2,6 +2,7 @@
 import { useEffect } from "react";
 import MainLayout from "./layouts/MainLayout";
 import Gallery from "./pages/Gallery";
+import Settings from "./pages/Settings";
 import { initializeDatabase } from "./lib/database";
 import "./App.css";
 
@@ -18,14 +19,18 @@ function App() {
 
   return (
     <MainLayout>
-      {({ active, query, refreshKey, refreshSidebar }) => (
-        <Gallery
-          active={active}
-          query={query}
-          refreshKey={refreshKey}
-          onSidebarRefresh={refreshSidebar}
-        />
-      )}
+      {({ active, query, refreshKey, refreshSidebar, onImported }) =>
+        active === "settings" ? (
+          <Settings onImported={onImported} />
+        ) : (
+          <Gallery
+            active={active}
+            query={query}
+            refreshKey={refreshKey}
+            onSidebarRefresh={refreshSidebar}
+          />
+        )
+      }
     </MainLayout>
   );
 }
