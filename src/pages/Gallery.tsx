@@ -1,14 +1,14 @@
 
 import { useEffect, useMemo, useState } from "react";
-import {
-    SlidersHorizontal,
-    LayoutGrid,
-    ChevronDown,
-    Sparkles,
-} from "lucide-react";
+import { Sparkles } from "lucide-react";
+import { invoke } from "@tauri-apps/api/core";
+import AlbumPickerModal from "../components/AlbumPickerModal";
+import GamePickerModal from "../components/GamePickerModal";
+import DeleteScreenshotModal from "../components/DeleteScreenshotModal";
 
 import ScreenshotCard, {
     type Screenshot,
+    type ScreenshotAction,
 } from "../components/ScreenshotCard";
 
 import ScreenshotViewer from "../components/ScreenshotViewer";
@@ -16,32 +16,57 @@ import ScreenshotViewer from "../components/ScreenshotViewer";
 import {
     initializeDatabase,
     getScreenshots,
+    getAlbums,
     toggleScreenshotFavorite,
+    setScreenshotAlbum,
+    updateScreenshotGame,
+    deleteScreenshot,
+    type AlbumRecord,
 } from "../lib/database";
 
 type GalleryProps = {
     query: string;
     active: string;
     refreshKey: number;
+    onSidebarRefresh: () => Promise<void>;
 };
+
+type GalleryAction =
+    | { type: "album"; screenshot: Screenshot }
+    | { type: "game"; screenshot: Screenshot }
+    | { type: "delete"; screenshot: Screenshot }
+    | null;
 
 export default function Gallery({
     query,
     active,
     refreshKey,
+    onSidebarRefresh,
 }: GalleryProps) {
     const [screenshots, setScreenshots] = useState<Screenshot[]>([]);
-    const [filter, setFilter] = useState("All");
+    const [albums, setAlbums] = useState<AlbumRecord[]>([]);
     const [loading, setLoading] = useState(true);
 
     const [selectedScreenshot, setSelectedScreenshot] =
         useState<Screenshot | null>(null);
 
+    const [galleryAction, setGalleryAction] = useState<GalleryAction>(null);
+
     const loadScreenshots = async () => {
         try {
             await initializeDatabase();
 
-            const records = await getScreenshots();
+            const filters =
+                active.startsWith("album:")
+                    ? { albumId: active.slice("album:".length) }
+                    : active.startsWith("game:")
+                        ? { game: active.slice("game:".length) }
+                        : {};
+
+            const [records, albumRecords] = await Promise.all([
+                getScreenshots(filters),
+                getAlbums(),
+            ]);
 
             const formatted: Screenshot[] = records.map((record) => {
                 const date = record.imported_at
@@ -60,10 +85,12 @@ export default function Gallery({
                     image: record.file_path,
                     aspect: "wide",
                     favorite: record.is_favorite === 1,
+                    albumId: record.album_id,
                 };
             });
 
             setScreenshots(formatted);
+            setAlbums(albumRecords);
         } catch (error) {
             console.error("Failed to load screenshots:", error);
         } finally {
@@ -73,8 +100,10 @@ export default function Gallery({
 
     useEffect(() => {
         setLoading(true);
+        setSelectedScreenshot(null);
+        setGalleryAction(null);
         loadScreenshots();
-    }, [refreshKey]);
+    }, [refreshKey, active]);
 
     const filtered = useMemo(() => {
         return screenshots.filter((item, index) => {
@@ -83,23 +112,15 @@ export default function Gallery({
                     .toLowerCase()
                     .includes(query.toLowerCase());
 
-            const matchesSection =
+            const matchesFavorites =
                 active !== "favorites" || item.favorite;
 
             const matchesRecent =
                 active !== "recent" || index < 3;
 
-            const matchesFilter =
-                filter === "All" || item.game === filter;
-
-            return (
-                matchesSearch &&
-                matchesSection &&
-                matchesRecent &&
-                matchesFilter
-            );
+            return matchesSearch && matchesFavorites && matchesRecent;
         });
-    }, [screenshots, query, active, filter]);
+    }, [screenshots, query, active]);
 
     const toggleFavorite = async (id: string) => {
         const screenshot = screenshots.find((item) => item.id === id);
@@ -110,10 +131,14 @@ export default function Gallery({
 
         setScreenshots((current) =>
             current.map((item) =>
-                item.id === id
-                    ? { ...item, favorite: newFavorite }
-                    : item
+                item.id === id ? { ...item, favorite: newFavorite } : item
             )
+        );
+
+        setSelectedScreenshot((current) =>
+            current?.id === id
+                ? { ...current, favorite: newFavorite }
+                : current
         );
 
         try {
@@ -123,12 +148,127 @@ export default function Gallery({
 
             setScreenshots((current) =>
                 current.map((item) =>
-                    item.id === id
-                        ? { ...item, favorite: !newFavorite }
+                    item.id === id ? { ...item, favorite: !newFavorite } : item
+                )
+            );
+
+            setSelectedScreenshot((current) =>
+                current?.id === id
+                    ? { ...current, favorite: !newFavorite }
+                    : current
+            );
+        }
+    };
+
+    const handleSetAlbum = async (
+        screenshotId: string,
+        albumId: string | null
+    ) => {
+        try {
+            await setScreenshotAlbum(screenshotId, albumId);
+
+            setScreenshots((current) =>
+                current.map((item) =>
+                    item.id === screenshotId ? { ...item, albumId } : item
+                )
+            );
+
+            setSelectedScreenshot((current) =>
+                current?.id === screenshotId
+                    ? { ...current, albumId }
+                    : current
+            );
+
+            if (
+                active.startsWith("album:") &&
+                active.slice("album:".length) !== albumId
+            ) {
+                setSelectedScreenshot(null);
+
+                setScreenshots((current) =>
+                    current.filter((item) => item.id !== screenshotId)
+                );
+            }
+        } catch (error) {
+            console.error("Failed to update screenshot album:", error);
+            throw error;
+        }
+    };
+
+    const handleUpdateGame = async (
+        screenshotId: string,
+        game: string | null
+    ) => {
+        try {
+            await updateScreenshotGame(screenshotId, game);
+            await onSidebarRefresh();
+
+            const updatedGame = game || "Unknown game";
+
+            setScreenshots((current) =>
+                current.map((item) =>
+                    item.id === screenshotId
+                        ? { ...item, game: updatedGame }
                         : item
                 )
             );
+
+            setSelectedScreenshot((current) =>
+                current?.id === screenshotId
+                    ? { ...current, game: updatedGame }
+                    : current
+            );
+
+            // If the screenshot no longer belongs to the selected game,
+            // remove it from the visible gallery.
+            if (
+                active.startsWith("game:") &&
+                active.slice("game:".length) !== updatedGame
+            ) {
+                setSelectedScreenshot(null);
+
+                setScreenshots((current) =>
+                    current.filter((item) => item.id !== screenshotId)
+                );
+            }
+
+            setGalleryAction(null);
+        } catch (error) {
+            console.error("Failed to update screenshot game:", error);
+            throw error;
         }
+    };
+
+    const handleDeleteScreenshot = async (screenshot: Screenshot) => {
+        try {
+            // Delete the physical image first.
+            await invoke("delete_screenshot_file", {
+                filePath: screenshot.image,
+            });
+
+            // Only remove the database record after file deletion succeeds.
+            await deleteScreenshot(screenshot.id);
+
+            setScreenshots((current) =>
+                current.filter((item) => item.id !== screenshot.id)
+            );
+
+            setSelectedScreenshot((current) =>
+                current?.id === screenshot.id ? null : current
+            );
+
+            setGalleryAction(null);
+        } catch (error) {
+            console.error("Failed to delete screenshot:", error);
+            alert("Не удалось удалить скриншот. Подробности в консоли.");
+        }
+    };
+
+    const handleRemoveFromAlbum = async (screenshot: Screenshot) => {
+        if (!screenshot.albumId) return;
+
+        await handleSetAlbum(screenshot.id, null);
+        setGalleryAction(null);
     };
 
     const handlePrevious = () => {
@@ -161,9 +301,40 @@ export default function Gallery({
             ? "Your favorites"
             : active === "recent"
                 ? "Recently added"
-                : active === "albums"
-                    ? "Your albums"
-                    : "All screenshots";
+                : active.startsWith("album:")
+                    ? albums.find(
+                        (album) => album.id === active.slice("album:".length)
+                    )?.name || "Album"
+                    : active.startsWith("game:")
+                        ? active.slice("game:".length)
+                        : "All screenshots";
+    const handleCardAction = (
+        action: ScreenshotAction,
+        screenshot: Screenshot
+    ) => {
+        if (action === "remove-album") {
+            handleRemoveFromAlbum(screenshot);
+            return;
+        }
+
+        setGalleryAction({
+            type: action,
+            screenshot,
+        });
+    };
+
+    const handleSelectAlbum = async (albumId: string | null) => {
+        if (!galleryAction || galleryAction.type !== "album") return;
+
+        await handleSetAlbum(galleryAction.screenshot.id, albumId);
+        setGalleryAction(null);
+    };
+
+    const handleSaveGame = async (game: string | null) => {
+        if (!galleryAction || galleryAction.type !== "game") return;
+
+        await handleUpdateGame(galleryAction.screenshot.id, game);
+    };
 
     return (
         <section className="gallery-page">
@@ -186,38 +357,6 @@ export default function Gallery({
                 </div>
             </div>
 
-            <div className="gallery-toolbar">
-                <div className="filter-tabs">
-                    {[
-                        "All",
-                        "GTA V Online",
-                        "Cyberpunk 2077",
-                        "Red Dead Redemption 2",
-                    ].map((name) => (
-                        <button
-                            key={name}
-                            className={`filter-tab ${filter === name ? "selected" : ""
-                                }`}
-                            onClick={() => setFilter(name)}
-                        >
-                            {name}
-                        </button>
-                    ))}
-                </div>
-
-                <div className="view-actions">
-                    <button className="toolbar-button">
-                        <SlidersHorizontal size={16} />
-                        Filter
-                    </button>
-
-                    <button className="toolbar-button">
-                        <LayoutGrid size={16} />
-                        <ChevronDown size={13} />
-                    </button>
-                </div>
-            </div>
-
             {loading ? (
                 <div className="empty-state">
                     <Sparkles size={28} />
@@ -233,6 +372,8 @@ export default function Gallery({
                             <ScreenshotCard
                                 item={item}
                                 onFavorite={toggleFavorite}
+                                onAction={handleCardAction}
+                                isInAlbumView={active.startsWith("album:")}
                             />
                         </div>
                     ))}
@@ -260,7 +401,33 @@ export default function Gallery({
                     )
                 )}
                 total={filtered.length}
+                albums={albums}
+                onSetAlbum={handleSetAlbum}
+            />
+            {galleryAction?.type === "album" && (
+                <AlbumPickerModal
+                    albums={albums}
+                    onSelect={handleSelectAlbum}
+                    onClose={() => setGalleryAction(null)}
+                />
+            )}
+            {galleryAction?.type === "game" && (
+                <GamePickerModal
+                    currentGame={galleryAction.screenshot.game}
+                    onSave={handleSaveGame}
+                    onClose={() => setGalleryAction(null)}
+                />
+            )}
+            <DeleteScreenshotModal
+                open={galleryAction?.type === "delete"}
+                onClose={() => setGalleryAction(null)}
+                onConfirm={() => {
+                    if (galleryAction?.type === "delete") {
+                        handleDeleteScreenshot(galleryAction.screenshot);
+                    }
+                }}
             />
         </section>
+
     );
 }

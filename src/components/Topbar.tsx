@@ -1,12 +1,10 @@
 
-import { Search, Plus, Command } from "lucide-react";
+import { Plus } from "lucide-react";
 import { open } from "@tauri-apps/plugin-dialog";
 import { invoke } from "@tauri-apps/api/core";
 import { saveScreenshot } from "../lib/database";
 
 type TopbarProps = {
-  query: string;
-  onSearch: (value: string) => void;
   onImported: () => void;
 };
 
@@ -16,11 +14,7 @@ type ImportedScreenshot = {
   file_path: string;
 };
 
-export default function Topbar({
-  query,
-  onSearch,
-  onImported,
-}: TopbarProps) {
+export default function Topbar({ onImported }: TopbarProps) {
   const handleAddScreenshots = async () => {
     try {
       const selected = await open({
@@ -67,18 +61,6 @@ export default function Topbar({
       </div>
 
       <div className="topbar-actions">
-        <div className="search-box glass-panel">
-          <Search size={17} />
-          <input
-            value={query}
-            onChange={(e) => onSearch(e.target.value)}
-            placeholder="Search your memories..."
-          />
-          <div className="shortcut">
-            <Command size={11} /> K
-          </div>
-        </div>
-
         <button className="add-button" onClick={handleAddScreenshots}>
           <Plus size={18} />
           <span>Add screenshots</span>

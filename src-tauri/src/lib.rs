@@ -70,6 +70,36 @@ async fn import_screenshots(
 }
 
 #[tauri::command]
+fn delete_screenshot_file(
+    app: AppHandle,
+    file_path: String,
+) -> Result<(), String> {
+    let app_data_dir = app
+        .path()
+        .app_data_dir()
+        .map_err(|e| e.to_string())?;
+
+    let images_dir = app_data_dir.join("images");
+
+    let images_dir = images_dir
+        .canonicalize()
+        .map_err(|e| format!("Не удалось найти папку изображений: {e}"))?;
+
+    let target = Path::new(&file_path)
+        .canonicalize()
+        .map_err(|e| format!("Не удалось найти изображение: {e}"))?;
+
+    if !target.starts_with(&images_dir) || !target.is_file() {
+        return Err("Недопустимый путь к изображению".to_string());
+    }
+
+    fs::remove_file(&target)
+        .map_err(|e| format!("Не удалось удалить изображение: {e}"))?;
+
+    Ok(())
+}
+
+#[tauri::command]
 fn greet(name: &str) -> String {
     format!("Hello, {}! You've been greeted from Rust!", name)
 }
@@ -82,7 +112,8 @@ pub fn run() {
         .plugin(tauri_plugin_sql::Builder::default().build())
         .invoke_handler(tauri::generate_handler![
             greet,
-            import_screenshots
+            import_screenshots,
+            delete_screenshot_file
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");

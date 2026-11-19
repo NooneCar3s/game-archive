@@ -18,11 +18,12 @@ function App() {
 
   return (
     <MainLayout>
-      {({ active, query, refreshKey }) => (
+      {({ active, query, refreshKey, refreshSidebar }) => (
         <Gallery
           active={active}
           query={query}
           refreshKey={refreshKey}
+          onSidebarRefresh={refreshSidebar}
         />
       )}
     </MainLayout>

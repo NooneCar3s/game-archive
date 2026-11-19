@@ -1,14 +1,18 @@
 
-import { useEffect } from "react";
+import { useEffect, useState } from "react";
 import { AnimatePresence, motion } from "motion/react";
 import {
   X,
   ChevronLeft,
   ChevronRight,
   Heart,
+  FolderOpen,
+  Check,
 } from "lucide-react";
 import { convertFileSrc } from "@tauri-apps/api/core";
+
 import type { Screenshot } from "./ScreenshotCard";
+import type { AlbumRecord } from "../lib/database";
 
 type Props = {
   item: Screenshot | null;
@@ -18,6 +22,8 @@ type Props = {
   onFavorite: (id: string) => void;
   currentIndex: number;
   total: number;
+  albums?: AlbumRecord[];
+  onSetAlbum?: (screenshotId: string, albumId: string | null) => void;
 };
 
 export default function ScreenshotViewer({
@@ -28,12 +34,30 @@ export default function ScreenshotViewer({
   onFavorite,
   currentIndex,
   total,
+  albums = [],
+  onSetAlbum,
 }: Props) {
+  const [albumMenuOpen, setAlbumMenuOpen] = useState(false);
+
+  useEffect(() => {
+    setAlbumMenuOpen(false);
+  }, [item?.id]);
+
   useEffect(() => {
     if (!item) return;
 
     const handleKeyDown = (event: KeyboardEvent) => {
-      if (event.key === "Escape") onClose();
+      if (event.key === "Escape") {
+        if (albumMenuOpen) {
+          setAlbumMenuOpen(false);
+        } else {
+          onClose();
+        }
+        return;
+      }
+
+      if (albumMenuOpen) return;
+
       if (event.key === "ArrowLeft") onPrevious();
       if (event.key === "ArrowRight") onNext();
     };
@@ -43,7 +67,14 @@ export default function ScreenshotViewer({
     return () => {
       window.removeEventListener("keydown", handleKeyDown);
     };
-  }, [item, onClose, onPrevious, onNext]);
+  }, [item, onClose, onPrevious, onNext, albumMenuOpen]);
+
+  const handleSetAlbum = (albumId: string | null) => {
+    if (!item) return;
+
+    onSetAlbum?.(item.id, albumId);
+    setAlbumMenuOpen(false);
+  };
 
   return (
     <AnimatePresence>
@@ -118,6 +149,16 @@ export default function ScreenshotViewer({
                 </span>
 
                 <button
+                  className={`viewer-album-icon ${
+                    item.albumId ? "has-album" : ""
+                  }`}
+                  onClick={() => setAlbumMenuOpen(true)}
+                  title="Add to album"
+                >
+                  <FolderOpen size={18} />
+                </button>
+
+                <button
                   className={`viewer-heart ${
                     item.favorite ? "is-favorite" : ""
                   }`}
@@ -135,6 +176,60 @@ export default function ScreenshotViewer({
                 ← → NAVIGATE <span>·</span> ESC CLOSE
               </span>
             </footer>
+
+            <AnimatePresence>
+              {albumMenuOpen && (
+                <motion.div
+                  className="viewer-album-modal-backdrop"
+                  initial={{ opacity: 0 }}
+                  animate={{ opacity: 1 }}
+                  exit={{ opacity: 0 }}
+                  onClick={() => setAlbumMenuOpen(false)}
+                >
+                  <motion.div
+                    className="viewer-album-modal"
+                    initial={{ opacity: 0, scale: 0.94, y: 8 }}
+                    animate={{ opacity: 1, scale: 1, y: 0 }}
+                    exit={{ opacity: 0, scale: 0.96, y: 5 }}
+                    transition={{ duration: 0.18, ease: "easeOut" }}
+                    onClick={(event) => event.stopPropagation()}
+                  >
+                    <div className="viewer-album-list">
+                      <button
+                        className={`viewer-album-option ${
+                          !item.albumId ? "selected" : ""
+                        }`}
+                        onClick={() => handleSetAlbum(null)}
+                      >
+                        <span>Без альбома</span>
+                        {!item.albumId && <Check size={16} />}
+                      </button>
+
+                      {albums.map((album) => (
+                        <button
+                          key={album.id}
+                          className={`viewer-album-option ${
+                            item.albumId === album.id ? "selected" : ""
+                          }`}
+                          onClick={() => handleSetAlbum(album.id)}
+                        >
+                          <span>{album.name}</span>
+                          {item.albumId === album.id && (
+                            <Check size={16} />
+                          )}
+                        </button>
+                      ))}
+                    </div>
+
+                    {albums.length === 0 && (
+                      <div className="viewer-album-empty">
+                        Пока нет созданных альбомов
+                      </div>
+                    )}
+                  </motion.div>
+                </motion.div>
+              )}
+            </AnimatePresence>
           </motion.div>
         </motion.div>
       )}
