@@ -49,8 +49,8 @@ export default function Gallery({
     const [screenshots, setScreenshots] = useState<Screenshot[]>([]);
     const [albums, setAlbums] = useState<AlbumRecord[]>([]);
     const [loading, setLoading] = useState(true);
-    const [loadingMore, setLoadingMore] = useState(false);
-    const [totalScreenshots, setTotalScreenshots] = useState(0);
+    const [, setLoadingMore] = useState(false);
+    const [, setTotalScreenshots] = useState(0);
     const [hasMore, setHasMore] = useState(true);
 
     const [scrollParent, setScrollParent] = useState<HTMLElement | null>(null);

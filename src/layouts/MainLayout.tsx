@@ -45,7 +45,7 @@ type ScanResult = {
 
 export default function MainLayout({ children }: Props) {
     const [active, setActive] = useState("all");
-    const [query, setQuery] = useState("");
+    const [query] = useState("");
     const [refreshKey, setRefreshKey] = useState(0);
 
     const [isAlbumModalOpen, setIsAlbumModalOpen] = useState(false);
