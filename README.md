@@ -80,6 +80,22 @@ Game Archive features a modern dark interface inspired by gaming aesthetics, wit
 - **Motion**
 - **React Virtuoso**
 
+## ❤️ Support Game Archive
+
+Game Archive is completely free to use, with no subscriptions or paid features.
+
+If you enjoy the app and would like to support its development, you can buy me a coffee on Ko-fi!
+
+Every contribution, no matter how small, is greatly appreciated and helps me dedicate more time to improving Game Archive.
+
+<p align="center">
+  <a href="https://ko-fi.com/noonecar3s">
+    <img src="https://ko-fi.com/img/githubbutton_sm.svg" alt="Support me on Ko-fi" />
+  </a>
+</p>
+
+Thank you for supporting independent development! ❤️
+
 ## 📦 Installation
 
 Download the latest Windows installer from the [GitHub Releases](../../releases) page.
