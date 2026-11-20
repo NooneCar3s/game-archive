@@ -1,7 +1,10 @@
+use image::ImageReader;
+use image::imageops::FilterType;
 use serde::Serialize;
 use sha2::{Digest, Sha256};
 use std::collections::HashSet;
 use std::fs;
+use std::io::BufWriter;
 use std::path::Path;
 use tauri::{AppHandle, Manager};
 use uuid::Uuid;
@@ -11,7 +14,34 @@ struct ImportedScreenshot {
     id: String,
     file_name: String,
     file_path: String,
+    thumbnail_path: String,
     content_hash: String,
+}
+
+fn create_thumbnail(source: &Path, thumbnails_dir: &Path, id: &str) -> Result<String, String> {
+    fs::create_dir_all(thumbnails_dir)
+        .map_err(|e| format!("Failed to create thumbnails folder: {e}"))?;
+
+    let image = ImageReader::open(source)
+        .map_err(|e| format!("Failed to open image: {e}"))?
+        .decode()
+        .map_err(|e| format!("Failed to decode image: {e}"))?;
+
+    let thumbnail = image.resize(800, 800, FilterType::Lanczos3);
+
+    let thumbnail_path = thumbnails_dir.join(format!("{id}.jpg"));
+    let file = fs::File::create(&thumbnail_path)
+        .map_err(|e| format!("Failed to create thumbnail: {e}"))?;
+
+    let mut writer = BufWriter::new(file);
+
+    let encoder = image::codecs::jpeg::JpegEncoder::new_with_quality(&mut writer, 82);
+
+    thumbnail
+        .write_with_encoder(encoder)
+        .map_err(|e| format!("Failed to save thumbnail: {e}"))?;
+
+    Ok(thumbnail_path.to_string_lossy().to_string())
 }
 
 fn supported_image(path: &Path) -> bool {
@@ -35,6 +65,7 @@ fn calculate_hash(path: &Path) -> Result<String, String> {
 fn import_image(
     source: &Path,
     images_dir: &Path,
+    thumbnails_dir: &Path,
     known_hashes: &mut HashSet<String>,
 ) -> Result<Option<ImportedScreenshot>, String> {
     if !source.is_file() || !supported_image(source) {
@@ -43,7 +74,6 @@ fn import_image(
 
     let content_hash = calculate_hash(source)?;
 
-    // Skip already imported images
     if !known_hashes.insert(content_hash.clone()) {
         return Ok(None);
     }
@@ -69,10 +99,19 @@ fn import_image(
         return Err(format!("Failed to copy {file_name}: {error}"));
     }
 
+    let thumbnail_path = match create_thumbnail(&destination, thumbnails_dir, &id) {
+        Ok(path) => path,
+        Err(error) => {
+            eprintln!("Thumbnail generation failed for {file_name}: {error}");
+            destination.to_string_lossy().to_string()
+        }
+    };
+
     Ok(Some(ImportedScreenshot {
         id,
         file_name,
         file_path: destination.to_string_lossy().to_string(),
+        thumbnail_path,
         content_hash,
     }))
 }
@@ -86,8 +125,12 @@ async fn import_screenshots(
     let app_data_dir = app.path().app_data_dir().map_err(|e| e.to_string())?;
 
     let images_dir = app_data_dir.join("images");
+    let thumbnails_dir = app_data_dir.join("thumbnails");
 
     fs::create_dir_all(&images_dir).map_err(|e| format!("Failed to create images folder: {e}"))?;
+
+    fs::create_dir_all(&thumbnails_dir)
+        .map_err(|e| format!("Failed to create thumbnails folder: {e}"))?;
 
     let mut known_hashes: HashSet<String> = existing_hashes.into_iter().collect();
     let mut imported = Vec::new();
@@ -95,7 +138,7 @@ async fn import_screenshots(
     for source_path in paths {
         let source = Path::new(&source_path);
 
-        match import_image(&source, &images_dir, &mut known_hashes) {
+        match import_image(source, &images_dir, &thumbnails_dir, &mut known_hashes) {
             Ok(Some(screenshot)) => imported.push(screenshot),
             Ok(None) => {}
             Err(error) => eprintln!("{error}"),
@@ -108,6 +151,7 @@ async fn import_screenshots(
 fn scan_directory(
     directory: &Path,
     images_dir: &Path,
+    thumbnails_dir: &Path,
     known_hashes: &mut HashSet<String>,
     imported: &mut Vec<ImportedScreenshot>,
 ) {
@@ -130,14 +174,15 @@ fn scan_directory(
         };
 
         if file_type.is_dir() {
-            // Avoid scanning the archive's own image storage.
             let is_images_dir = path.canonicalize().ok() == images_dir.canonicalize().ok();
 
-            if !is_images_dir {
-                scan_directory(&path, images_dir, known_hashes, imported);
+            let is_thumbnails_dir = path.canonicalize().ok() == thumbnails_dir.canonicalize().ok();
+
+            if !is_images_dir && !is_thumbnails_dir {
+                scan_directory(&path, images_dir, thumbnails_dir, known_hashes, imported);
             }
         } else if file_type.is_file() {
-            match import_image(&path, images_dir, known_hashes) {
+            match import_image(&path, images_dir, thumbnails_dir, known_hashes) {
                 Ok(Some(screenshot)) => imported.push(screenshot),
                 Ok(None) => {}
                 Err(error) => eprintln!("{error}"),
@@ -155,11 +200,14 @@ async fn scan_watched_folders(
     let app_data_dir = app.path().app_data_dir().map_err(|e| e.to_string())?;
 
     let images_dir = app_data_dir.join("images");
+    let thumbnails_dir = app_data_dir.join("thumbnails");
 
     fs::create_dir_all(&images_dir).map_err(|e| format!("Failed to create images folder: {e}"))?;
 
-    let mut known_hashes: HashSet<String> = existing_hashes.into_iter().collect();
+    fs::create_dir_all(&thumbnails_dir)
+        .map_err(|e| format!("Failed to create thumbnails folder: {e}"))?;
 
+    let mut known_hashes: HashSet<String> = existing_hashes.into_iter().collect();
     let mut imported = Vec::new();
 
     for folder in folders {
@@ -169,7 +217,13 @@ async fn scan_watched_folders(
             continue;
         }
 
-        scan_directory(directory, &images_dir, &mut known_hashes, &mut imported);
+        scan_directory(
+            directory,
+            &images_dir,
+            &thumbnails_dir,
+            &mut known_hashes,
+            &mut imported,
+        );
     }
 
     Ok(imported)
@@ -180,6 +234,7 @@ fn delete_screenshot_file(app: AppHandle, file_path: String) -> Result<(), Strin
     let app_data_dir = app.path().app_data_dir().map_err(|e| e.to_string())?;
 
     let images_dir = app_data_dir.join("images");
+    let thumbnails_dir = app_data_dir.join("thumbnails");
 
     let images_dir = images_dir
         .canonicalize()
@@ -193,46 +248,52 @@ fn delete_screenshot_file(app: AppHandle, file_path: String) -> Result<(), Strin
         return Err("Invalid image path".to_string());
     }
 
+    let file_stem = target
+        .file_stem()
+        .and_then(|name| name.to_str())
+        .ok_or_else(|| "Invalid image filename".to_string())?;
+
     fs::remove_file(&target).map_err(|e| format!("Failed to delete image: {e}"))?;
+
+    let thumbnail_path = thumbnails_dir.join(format!("{file_stem}.jpg"));
+
+    if thumbnail_path.is_file() {
+        fs::remove_file(&thumbnail_path).map_err(|e| format!("Failed to delete thumbnail: {e}"))?;
+    }
 
     Ok(())
 }
 
-
 #[tauri::command]
 fn delete_all_screenshot_files(app: AppHandle) -> Result<(), String> {
-    let app_data_dir = app
-        .path()
-        .app_data_dir()
-        .map_err(|e| e.to_string())?;
+    let app_data_dir = app.path().app_data_dir().map_err(|e| e.to_string())?;
 
     let images_dir = app_data_dir.join("images");
+    let thumbnails_dir = app_data_dir.join("thumbnails");
 
-    if !images_dir.exists() {
-        return Ok(());
-    }
+    for directory in [&images_dir, &thumbnails_dir] {
+        if !directory.exists() {
+            continue;
+        }
 
-    if !images_dir.is_dir() {
-        return Err("Images path is not a directory".to_string());
-    }
+        if !directory.is_dir() {
+            return Err(format!("Path is not a directory: {}", directory.display()));
+        }
 
-    for entry in fs::read_dir(&images_dir)
-        .map_err(|e| format!("Failed to read images directory: {e}"))?
-    {
-        let entry = entry
-            .map_err(|e| format!("Failed to read directory entry: {e}"))?;
+        for entry in
+            fs::read_dir(directory).map_err(|e| format!("Failed to read directory: {e}"))?
+        {
+            let entry = entry.map_err(|e| format!("Failed to read directory entry: {e}"))?;
+            let path = entry.path();
 
-        let path = entry.path();
-
-        if path.is_file() {
-            fs::remove_file(&path)
-                .map_err(|e| format!("Failed to delete file: {e}"))?;
+            if path.is_file() {
+                fs::remove_file(&path).map_err(|e| format!("Failed to delete file: {e}"))?;
+            }
         }
     }
 
     Ok(())
 }
-
 
 #[tauri::command]
 fn greet(name: &str) -> String {

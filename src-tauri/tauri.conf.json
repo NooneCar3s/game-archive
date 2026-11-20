@@ -18,14 +18,15 @@
       }
     ],
     "security": {
-  "csp": null,
-  "assetProtocol": {
-    "enable": true,
-    "scope": [
-      "$APPDATA/images/**"
-    ]
-  }
-}
+      "csp": null,
+      "assetProtocol": {
+        "enable": true,
+        "scope": [
+          "$APPDATA/images/**",
+          "$APPDATA/thumbnails/**"
+        ]
+      }
+    }
   },
   "bundle": {
     "active": true,

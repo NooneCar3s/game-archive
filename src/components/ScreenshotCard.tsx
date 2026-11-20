@@ -17,6 +17,7 @@ export type Screenshot = {
   game: string;
   date: string;
   image: string;
+  thumbnail: string;
   aspect: string;
   favorite: boolean;
   albumId: string | null;
@@ -41,7 +42,7 @@ export default function ScreenshotCard({
   onAction,
   isInAlbumView,
 }: Props) {
-  const imageSrc = convertFileSrc(item.image);
+  const imageSrc = convertFileSrc(item.thumbnail || item.image);
   const [menuOpen, setMenuOpen] = useState(false);
   const menuRef = useRef<HTMLDivElement>(null);
 
@@ -80,11 +81,7 @@ export default function ScreenshotCard({
   return (
     <motion.article
       className="screenshot-card"
-      layout
-      initial={{ opacity: 0, y: 18 }}
-      animate={{ opacity: 1, y: 0 }}
-      whileHover={{ y: -5 }}
-      transition={{ duration: 0.25, ease: "easeOut" }}
+      whileHover={{ y: -3 }}
     >
       <div className={`screenshot-image ${item.aspect}`}>
         <img src={imageSrc} alt={item.title} loading="lazy" />

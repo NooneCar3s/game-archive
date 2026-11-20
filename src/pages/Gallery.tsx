@@ -1,10 +1,11 @@
 
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import { Sparkles } from "lucide-react";
 import { invoke } from "@tauri-apps/api/core";
 import AlbumPickerModal from "../components/AlbumPickerModal";
 import GamePickerModal from "../components/GamePickerModal";
 import DeleteScreenshotModal from "../components/DeleteScreenshotModal";
+import { VirtuosoGrid } from "react-virtuoso";
 
 import ScreenshotCard, {
     type Screenshot,
@@ -15,7 +16,7 @@ import ScreenshotViewer from "../components/ScreenshotViewer";
 
 import {
     initializeDatabase,
-    getScreenshots,
+    getScreenshotsPage,
     getAlbums,
     toggleScreenshotFavorite,
     setScreenshotAlbum,
@@ -43,32 +44,51 @@ export default function Gallery({
     refreshKey,
     onSidebarRefresh,
 }: GalleryProps) {
+    const PAGE_SIZE = 40;
+
     const [screenshots, setScreenshots] = useState<Screenshot[]>([]);
     const [albums, setAlbums] = useState<AlbumRecord[]>([]);
     const [loading, setLoading] = useState(true);
+    const [loadingMore, setLoadingMore] = useState(false);
+    const [totalScreenshots, setTotalScreenshots] = useState(0);
+    const [hasMore, setHasMore] = useState(true);
+
+    const [scrollParent, setScrollParent] = useState<HTMLElement | null>(null);
+    const loadingMoreRef = useRef(false);
 
     const [selectedScreenshot, setSelectedScreenshot] =
         useState<Screenshot | null>(null);
 
     const [galleryAction, setGalleryAction] = useState<GalleryAction>(null);
 
+
     const loadScreenshots = async () => {
         try {
             await initializeDatabase();
 
-            const filters =
-                active.startsWith("album:")
+            const filters = {
+                ...(active.startsWith("album:")
                     ? { albumId: active.slice("album:".length) }
-                    : active.startsWith("game:")
-                        ? { game: active.slice("game:".length) }
-                        : {};
+                    : {}),
+                ...(active.startsWith("game:")
+                    ? { game: active.slice("game:".length) }
+                    : {}),
+                ...(active === "favorites"
+                    ? { favoritesOnly: true }
+                    : {}),
+                ...(query.trim()
+                    ? { search: query.trim() }
+                    : {}),
+            };
 
-            const [records, albumRecords] = await Promise.all([
-                getScreenshots(filters),
+            const pageSize = active === "recent" ? 3 : PAGE_SIZE;
+
+            const [page, albumRecords] = await Promise.all([
+                getScreenshotsPage(filters, pageSize, 0),
                 getAlbums(),
             ]);
 
-            const formatted: Screenshot[] = records.map((record) => {
+            const formatted: Screenshot[] = page.items.map((record) => {
                 const date = record.imported_at
                     ? new Date(`${record.imported_at.replace(" ", "T")}Z`)
                     : new Date();
@@ -83,6 +103,7 @@ export default function Gallery({
                         year: "numeric",
                     }).toUpperCase(),
                     image: record.file_path,
+                    thumbnail: record.thumbnail_path || record.file_path,
                     aspect: "wide",
                     favorite: record.is_favorite === 1,
                     albumId: record.album_id,
@@ -91,6 +112,15 @@ export default function Gallery({
 
             setScreenshots(formatted);
             setAlbums(albumRecords);
+            setTotalScreenshots(
+                active === "recent"
+                    ? Math.min(page.total, 3)
+                    : page.total
+            );
+            setHasMore(
+                active !== "recent" &&
+                formatted.length < page.total
+            );
         } catch (error) {
             console.error("Failed to load screenshots:", error);
         } finally {
@@ -98,12 +128,81 @@ export default function Gallery({
         }
     };
 
+
+    const loadMoreScreenshots = async () => {
+        if (loading || loadingMoreRef.current || !hasMore) return;
+
+        loadingMoreRef.current = true;
+        setLoadingMore(true);
+
+        try {
+            const filters = {
+                ...(active.startsWith("album:")
+                    ? { albumId: active.slice("album:".length) }
+                    : {}),
+                ...(active.startsWith("game:")
+                    ? { game: active.slice("game:".length) }
+                    : {}),
+                ...(active === "favorites"
+                    ? { favoritesOnly: true }
+                    : {}),
+                ...(query.trim()
+                    ? { search: query.trim() }
+                    : {}),
+            };
+
+            const page = await getScreenshotsPage(
+                filters,
+                PAGE_SIZE,
+                screenshots.length
+            );
+
+            const formatted: Screenshot[] = page.items.map((record) => {
+                const date = record.imported_at
+                    ? new Date(`${record.imported_at.replace(" ", "T")}Z`)
+                    : new Date();
+
+                return {
+                    id: record.id,
+                    title: record.file_name,
+                    game: record.game || "Unknown game",
+                    date: date.toLocaleDateString("en-US", {
+                        month: "short",
+                        day: "2-digit",
+                        year: "numeric",
+                    }).toUpperCase(),
+                    image: record.file_path,
+                    thumbnail: record.thumbnail_path || record.file_path,
+                    aspect: "wide",
+                    favorite: record.is_favorite === 1,
+                    albumId: record.album_id,
+                };
+            });
+
+            setScreenshots((current) => [...current, ...formatted]);
+            setHasMore(screenshots.length + formatted.length < page.total);
+        } catch (error) {
+            console.error("Failed to load more screenshots:", error);
+        } finally {
+            loadingMoreRef.current = false;
+            setLoadingMore(false);
+        }
+    };
+
+
+
     useEffect(() => {
         setLoading(true);
+        setLoadingMore(false);
         setSelectedScreenshot(null);
         setGalleryAction(null);
+        setScreenshots([]);
+        setHasMore(true);
+
         loadScreenshots();
-    }, [refreshKey, active]);
+    }, [refreshKey, active, query]);
+
+
 
     const filtered = useMemo(() => {
         return screenshots.filter((item, index) => {
@@ -337,7 +436,7 @@ export default function Gallery({
     };
 
     return (
-        <section className="gallery-page">
+        <section className="gallery-page" ref={setScrollParent}>
             <div className="gallery-heading">
                 <div>
                     <div className="eyebrow">
@@ -363,21 +462,30 @@ export default function Gallery({
                     <h3>Loading your memories...</h3>
                 </div>
             ) : filtered.length > 0 ? (
-                <div className="gallery-grid">
-                    {filtered.map((item) => (
-                        <div
-                            key={item.id}
-                            onClick={() => setSelectedScreenshot(item)}
-                        >
-                            <ScreenshotCard
-                                item={item}
-                                onFavorite={toggleFavorite}
-                                onAction={handleCardAction}
-                                isInAlbumView={active.startsWith("album:")}
-                            />
-                        </div>
-                    ))}
-                </div>
+                scrollParent ? (
+                    <VirtuosoGrid
+                        customScrollParent={scrollParent}
+                        data={filtered}
+                        increaseViewportBy={600}
+                        endReached={() => {
+                            if (hasMore && !loading && !loadingMoreRef.current) {
+                                loadMoreScreenshots();
+                            }
+                        }}
+                        listClassName="gallery-grid"
+                        itemClassName="gallery-grid-item"
+                        itemContent={(_, item) => (
+                            <div onClick={() => setSelectedScreenshot(item)}>
+                                <ScreenshotCard
+                                    item={item}
+                                    onFavorite={toggleFavorite}
+                                    onAction={handleCardAction}
+                                    isInAlbumView={active.startsWith("album:")}
+                                />
+                            </div>
+                        )}
+                    />
+                ) : null
             ) : (
                 <div className="empty-state">
                     <Sparkles size={28} />

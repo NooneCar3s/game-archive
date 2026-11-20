@@ -47,8 +47,15 @@ export function initializeDatabase(): Promise<void> {
 
             // Screenshot content hash
             const screenshotColumns = await db.select<{ name: string }[]>(
-                `PRAGMA table_info(screenshots)`
+                "PRAGMA table_info(screenshots)"
             );
+
+            if (!screenshotColumns.some((column) => column.name === "thumbnail_path")) {
+                await db.execute(
+                    "ALTER TABLE screenshots ADD COLUMN thumbnail_path TEXT"
+                );
+            }
+
 
             if (!screenshotColumns.some((column) => column.name === "content_hash")) {
                 await db.execute(`
@@ -97,6 +104,7 @@ export function initializeDatabase(): Promise<void> {
 }
 
 export type ImportedScreenshot = {
+    thumbnail_path: string;
     id: string;
     file_name: string;
     file_path: string;
@@ -108,12 +116,19 @@ export async function saveScreenshot(screenshot: ImportedScreenshot) {
     const db = await getDatabase();
 
     await db.execute(
-        `INSERT INTO screenshots (id, file_name, file_path, content_hash)
-         VALUES ($1, $2, $3, $4)`,
+        `INSERT INTO screenshots (
+            id,
+            file_name,
+            file_path,
+            thumbnail_path,
+            content_hash
+        )
+        VALUES ($1, $2, $3, $4, $5)`,
         [
             screenshot.id,
             screenshot.file_name,
             screenshot.file_path,
+            screenshot.thumbnail_path,
             screenshot.content_hash,
         ]
     );
@@ -133,6 +148,7 @@ export async function getScreenshotHashes(): Promise<string[]> {
 
 
 export type ScreenshotRecord = {
+    thumbnail_path: string | null;
     id: string;
     file_name: string;
     file_path: string;
@@ -145,28 +161,104 @@ export type ScreenshotRecord = {
     content_hash: string | null;
 };
 
+
 export type ScreenshotFilters = {
     albumId?: string;
     game?: string;
+    favoritesOnly?: boolean;
+    search?: string;
+    recentOnly?: boolean;
 };
+
+export type ScreenshotPage = {
+    items: ScreenshotRecord[];
+    total: number;
+};
+
+function buildScreenshotWhere(filters: ScreenshotFilters) {
+    const conditions: string[] = [];
+    const values: (string | number)[] = [];
+
+    if (filters.albumId) {
+        values.push(filters.albumId);
+        conditions.push(`album_id = $${values.length}`);
+    }
+
+    if (filters.game) {
+        values.push(filters.game);
+        conditions.push(`game = $${values.length}`);
+    }
+
+    if (filters.favoritesOnly) {
+        conditions.push("is_favorite = 1");
+    }
+
+    if (filters.search?.trim()) {
+        values.push(`%${filters.search.trim()}%`);
+        conditions.push(
+            `(file_name LIKE $${values.length} OR game LIKE $${values.length})`
+        );
+    }
+
+    return {
+        where: conditions.length > 0
+            ? `WHERE ${conditions.join(" AND ")}`
+            : "",
+        values,
+    };
+}
+
+export async function getScreenshotsPage(
+    filters: ScreenshotFilters = {},
+    limit = 40,
+    offset = 0
+): Promise<ScreenshotPage> {
+    const db = await getDatabase();
+    const { where, values } = buildScreenshotWhere(filters);
+
+    const safeLimit = Math.max(1, Math.floor(limit));
+    const safeOffset = Math.max(0, Math.floor(offset));
+
+    const [items, countResult] = await Promise.all([
+        db.select<ScreenshotRecord[]>(
+            `SELECT *
+             FROM screenshots
+             ${where}
+             ORDER BY imported_at DESC, id DESC
+             LIMIT $${values.length + 1}
+             OFFSET $${values.length + 2}`,
+            [...values, safeLimit, safeOffset]
+        ),
+
+        db.select<{ total: number }[]>(
+            `SELECT COUNT(*) as total
+             FROM screenshots
+             ${where}`,
+            values
+        ),
+    ]);
+
+    return {
+        items,
+        total: countResult[0]?.total ?? 0,
+    };
+}
 
 export async function getScreenshots(
     filters: ScreenshotFilters = {}
 ): Promise<ScreenshotRecord[]> {
     const db = await getDatabase();
+    const { where, values } = buildScreenshotWhere(filters);
 
     return db.select<ScreenshotRecord[]>(
         `SELECT *
          FROM screenshots
-         WHERE ($1 IS NULL OR album_id = $1)
-           AND ($2 IS NULL OR game = $2)
-         ORDER BY imported_at DESC`,
-        [
-            filters.albumId ?? null,
-            filters.game ?? null,
-        ]
+         ${where}
+         ORDER BY imported_at DESC, id DESC`,
+        values
     );
 }
+
 
 export async function toggleScreenshotFavorite(
     id: string,

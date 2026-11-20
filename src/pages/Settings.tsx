@@ -25,6 +25,7 @@ type SettingsProps = {
 };
 
 type ImportedScreenshot = {
+    thumbnail_path: string;
     id: string;
     file_name: string;
     file_path: string;
