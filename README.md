@@ -7,15 +7,62 @@ Game Archive is a desktop application designed to help you organize, manage, and
 ## ✨ Features
 
 - **Screenshot Library** — Keep all your gaming screenshots in one place.
-- **Game Organization** — Automatically organize screenshots by game.
+- **Automatic Import** — Automatically import new screenshots from monitored folders.
+- **NVIDIA App Integration** — Import screenshots directly from the NVIDIA App's standard `Screenshots` directory, automatically identifying games based on their folder names.
+- **Game Organization** — Automatically assign screenshots to their corresponding games.
 - **Albums** — Create custom albums and group your favorite moments.
 - **Favorites** — Quickly access your most memorable screenshots.
-- **Watched Folders** — Monitor selected folders and automatically import new screenshots.
 - **Duplicate Detection** — SHA-256 hashing prevents duplicate screenshots from being imported.
 - **Thumbnail Generation** — Optimized thumbnails make browsing large collections faster while preserving original image quality.
 - **Search & Filtering** — Find screenshots by game, album, or search query.
 - **Full-Size Viewer** — View original screenshots with convenient navigation.
 - **Local Storage** — Your screenshots and library data stay on your device.
+
+  ## 📸 Screenshots
+
+![Gallery](screenshots/gallery.png)
+
+![Screenshot Viewer](screenshots/viewer.png)
+
+![Settings](screenshots/settings.png)
+
+## 📂 Automatic Screenshot Import
+
+Game Archive provides two ways to automatically import screenshots.
+
+### 1. Custom Watched Folders
+
+Add any folder containing screenshots to the watched folders list in Settings.
+
+Game Archive will periodically scan these folders and automatically import newly discovered screenshots into your library.
+
+### 2. NVIDIA App Integration (Recommended)
+
+NVIDIA App stores screenshots in a dedicated `Screenshots` directory, organized into separate subfolders named after the games.
+
+For example:
+
+```text
+Screenshots/
+├── Cyberpunk 2077/
+│   ├── screenshot_1.png
+│   └── screenshot_2.png
+├── Red Dead Redemption 2/
+│   └── screenshot_3.png
+└── Assassin's Creed Shadows/
+    └── screenshot_4.png
+```
+
+Simply select the main `Screenshots` folder in the dedicated NVIDIA App section of Game Archive Settings.
+
+Game Archive will:
+- Scan the directory and its game-specific subfolders.
+- Automatically detect game names from folder names.
+- Import screenshots and assign the corresponding game automatically.
+- Generate optimized thumbnails.
+- Skip duplicate screenshots.
+
+**This is the recommended way to use Game Archive:** keep taking screenshots with NVIDIA App as usual, while Game Archive automatically builds and organizes your personal screenshot library in the background.
 
 ## 🎨 Design
 
