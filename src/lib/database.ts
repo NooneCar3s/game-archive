@@ -79,6 +79,33 @@ export function initializeDatabase(): Promise<void> {
                 )
             `);
 
+            // Metadata cache for watched-folder scans. Unchanged files can be
+            // skipped without reading their contents or calculating SHA-256.
+            await db.execute(`
+                CREATE TABLE IF NOT EXISTS scanned_files (
+                    source_path TEXT PRIMARY KEY,
+                    size_bytes TEXT NOT NULL,
+                    modified_ns TEXT NOT NULL,
+                    content_hash TEXT NOT NULL,
+                    game TEXT
+                )
+            `);
+
+            const scannedFileColumns = await db.select<{ name: string }[]>(
+                "PRAGMA table_info(scanned_files)"
+            );
+            if (!scannedFileColumns.some((column) => column.name === "game")) {
+                await db.execute("ALTER TABLE scanned_files ADD COLUMN game TEXT");
+            }
+
+            await db.execute(`
+                CREATE TABLE IF NOT EXISTS nvidia_watched_folders (
+                    id TEXT PRIMARY KEY,
+                    path TEXT NOT NULL UNIQUE,
+                    created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
+                )
+            `);
+
             // Indexes
             await db.execute(`
                 CREATE INDEX IF NOT EXISTS idx_screenshots_game
@@ -109,7 +136,54 @@ export type ImportedScreenshot = {
     file_name: string;
     file_path: string;
     content_hash: string;
+    game: string | null;
 };
+
+export type ScannedFileRecord = {
+    source_path: string;
+    size_bytes: string;
+    modified_ns: string;
+    content_hash: string;
+    game: string | null;
+};
+
+export type ScreenshotGameUpdate = {
+    content_hash: string;
+    game: string;
+};
+
+export async function getScannedFiles(): Promise<ScannedFileRecord[]> {
+    const db = await getDatabase();
+    return db.select<ScannedFileRecord[]>(
+        `SELECT source_path, size_bytes, modified_ns, content_hash, game FROM scanned_files`
+    );
+}
+
+export async function saveScannedFiles(files: ScannedFileRecord[]): Promise<void> {
+    if (files.length === 0) return;
+    const db = await getDatabase();
+    // Stay below SQLite's parameter limit while reducing SQL bridge calls.
+    for (let start = 0; start < files.length; start += 200) {
+        const batch = files.slice(start, start + 200);
+        const rows = batch.map((_, index) => {
+            const base = index * 5;
+            return `($${base + 1}, $${base + 2}, $${base + 3}, $${base + 4}, $${base + 5})`;
+        });
+        const values = batch.flatMap((file) => [
+            file.source_path, file.size_bytes, file.modified_ns, file.content_hash, file.game,
+        ]);
+        await db.execute(
+            `INSERT INTO scanned_files (source_path, size_bytes, modified_ns, content_hash, game)
+             VALUES ${rows.join(", ")}
+             ON CONFLICT(source_path) DO UPDATE SET
+                size_bytes = excluded.size_bytes,
+                modified_ns = excluded.modified_ns,
+                content_hash = excluded.content_hash,
+                game = excluded.game`,
+            values
+        );
+    }
+}
 
 
 export async function saveScreenshot(screenshot: ImportedScreenshot) {
@@ -121,17 +195,37 @@ export async function saveScreenshot(screenshot: ImportedScreenshot) {
             file_name,
             file_path,
             thumbnail_path,
-            content_hash
+            content_hash,
+            game
         )
-        VALUES ($1, $2, $3, $4, $5)`,
+        VALUES ($1, $2, $3, $4, $5, $6)`,
         [
             screenshot.id,
             screenshot.file_name,
             screenshot.file_path,
             screenshot.thumbnail_path,
             screenshot.content_hash,
+            screenshot.game,
         ]
     );
+}
+
+export async function persistScanResult(result: {
+    imported: ImportedScreenshot[];
+    scanned_files: ScannedFileRecord[];
+    game_updates: ScreenshotGameUpdate[];
+}): Promise<void> {
+    for (const screenshot of result.imported) {
+        await saveScreenshot(screenshot);
+    }
+    const db = await getDatabase();
+    for (const update of result.game_updates) {
+        await db.execute(
+            "UPDATE screenshots SET game = $1 WHERE content_hash = $2",
+            [update.game, update.content_hash]
+        );
+    }
+    await saveScannedFiles(result.scanned_files);
 }
 
 export async function getScreenshotHashes(): Promise<string[]> {
@@ -376,6 +470,14 @@ export async function deleteScreenshot(
 ): Promise<void> {
     const db = await getDatabase();
 
+    // If the archive copy is removed, allow watched folders to import that
+    // content again on the next scan.
+    await db.execute(
+        `DELETE FROM scanned_files
+         WHERE content_hash = (SELECT content_hash FROM screenshots WHERE id = $1)`,
+        [screenshotId]
+    );
+
     await db.execute(
         `DELETE FROM screenshots
          WHERE id = $1`,
@@ -387,6 +489,7 @@ export async function deleteAllScreenshots(): Promise<void> {
     const db = await getDatabase();
 
     await db.execute("DELETE FROM screenshots");
+    await db.execute("DELETE FROM scanned_files");
 }
 
 
@@ -395,6 +498,28 @@ export type WatchedFolderRecord = {
     path: string;
     created_at: string;
 };
+
+export type NvidiaWatchedFolderRecord = WatchedFolderRecord;
+
+export async function getNvidiaWatchedFolders(): Promise<NvidiaWatchedFolderRecord[]> {
+    const db = await getDatabase();
+    return db.select<NvidiaWatchedFolderRecord[]>(
+        `SELECT * FROM nvidia_watched_folders ORDER BY created_at DESC`
+    );
+}
+
+export async function addNvidiaWatchedFolder(path: string): Promise<void> {
+    const db = await getDatabase();
+    await db.execute(
+        `INSERT OR IGNORE INTO nvidia_watched_folders (id, path) VALUES ($1, $2)`,
+        [crypto.randomUUID(), path]
+    );
+}
+
+export async function deleteNvidiaWatchedFolder(id: string): Promise<void> {
+    const db = await getDatabase();
+    await db.execute(`DELETE FROM nvidia_watched_folders WHERE id = $1`, [id]);
+}
 
 export async function getWatchedFolders(): Promise<WatchedFolderRecord[]> {
     const db = await getDatabase();

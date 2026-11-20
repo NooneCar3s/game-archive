@@ -13,35 +13,46 @@ import { open } from "@tauri-apps/plugin-dialog";
 
 import {
     getWatchedFolders,
+    getNvidiaWatchedFolders,
     addWatchedFolder,
+    addNvidiaWatchedFolder,
     deleteWatchedFolder,
+    deleteNvidiaWatchedFolder,
     getScreenshotHashes,
-    saveScreenshot,
+    getScannedFiles,
+    persistScanResult,
     type WatchedFolderRecord,
+    type ImportedScreenshot,
+    type ScannedFileRecord,
+    type NvidiaWatchedFolderRecord,
+    type ScreenshotGameUpdate,
 } from "../lib/database";
 
 type SettingsProps = {
     onImported: () => void;
 };
 
-type ImportedScreenshot = {
-    thumbnail_path: string;
-    id: string;
-    file_name: string;
-    file_path: string;
-    content_hash: string;
+type ScanResult = {
+    imported: ImportedScreenshot[];
+    scanned_files: ScannedFileRecord[];
+    game_updates: ScreenshotGameUpdate[];
 };
 
 export default function Settings({ onImported }: SettingsProps) {
     const [folders, setFolders] = useState<WatchedFolderRecord[]>([]);
+    const [nvidiaFolders, setNvidiaFolders] = useState<NvidiaWatchedFolderRecord[]>([]);
     const [loading, setLoading] = useState(true);
     const [adding, setAdding] = useState(false);
     const [isScanning, setIsScanning] = useState(false);
 
     async function loadFolders() {
         try {
-            const result = await getWatchedFolders();
+            const [result, nvidiaResult] = await Promise.all([
+                getWatchedFolders(),
+                getNvidiaWatchedFolders(),
+            ]);
             setFolders(result);
+            setNvidiaFolders(nvidiaResult);
         } catch (error) {
             console.error("Failed to load watched folders:", error);
         } finally {
@@ -87,8 +98,37 @@ export default function Settings({ onImported }: SettingsProps) {
         }
     }
 
+    async function handleAddNvidiaFolder() {
+        try {
+            setAdding(true);
+            const selected = await open({
+                directory: true,
+                multiple: false,
+                title: "Select NVIDIA App ScreenShots folder",
+            });
+            if (!selected || typeof selected !== "string") return;
+            await addNvidiaWatchedFolder(selected);
+            await loadFolders();
+        } catch (error) {
+            console.error("Failed to add NVIDIA App folder:", error);
+            alert("Failed to add NVIDIA App folder.");
+        } finally {
+            setAdding(false);
+        }
+    }
+
+    async function handleDeleteNvidiaFolder(id: string) {
+        try {
+            await deleteNvidiaWatchedFolder(id);
+            await loadFolders();
+        } catch (error) {
+            console.error("Failed to remove NVIDIA App folder:", error);
+            alert("Failed to remove NVIDIA App folder.");
+        }
+    }
+
     async function handleScanNow() {
-        if (folders.length === 0 || adding || isScanning) {
+        if ((folders.length === 0 && nvidiaFolders.length === 0) || adding || isScanning) {
             return;
         }
 
@@ -97,22 +137,27 @@ export default function Settings({ onImported }: SettingsProps) {
             setAdding(true);
 
             const existingHashes = await getScreenshotHashes();
+            const cachedFiles = await getScannedFiles();
 
-            const imported = await invoke<ImportedScreenshot[]>(
+            const result = await invoke<ScanResult>(
                 "scan_watched_folders",
                 {
                     folders: folders.map((folder) => folder.path),
+                    nvidiaFolders: nvidiaFolders.map((folder) => folder.path),
                     existingHashes,
+                    cachedFiles,
                 }
             );
 
-            for (const screenshot of imported) {
-                await saveScreenshot(screenshot);
-            }
+            await persistScanResult(result);
 
-            if (imported.length > 0) {
+            if (result.imported.length > 0 || result.game_updates.length > 0) {
                 onImported();
-                alert(`Successfully imported ${imported.length} screenshot(s).`);
+            }
+            if (result.imported.length > 0) {
+                alert(`Successfully imported ${result.imported.length} screenshot(s).`);
+            } else if (result.game_updates.length > 0) {
+                alert(`Updated game assignment for ${result.game_updates.length} screenshot(s).`);
             } else {
                 alert("No new screenshots found.");
             }
@@ -176,7 +221,7 @@ export default function Settings({ onImported }: SettingsProps) {
                             <button
                                 className="settings-scan-button"
                                 onClick={handleScanNow}
-                                disabled={adding || folders.length === 0}
+                                disabled={adding || (folders.length === 0 && nvidiaFolders.length === 0)}
                             >
                                 <ScanSearch size={16} />
                                 {isScanning ? "Scanning..." : "Scan Now"}
@@ -218,6 +263,69 @@ export default function Settings({ onImported }: SettingsProps) {
                                         className="watched-folder-delete"
                                         onClick={() => handleDeleteFolder(folder.id)}
                                         title="Remove folder"
+                                        disabled={adding}
+                                    >
+                                        <Trash2 size={17} />
+                                    </button>
+                                </div>
+                            ))
+                        )}
+                    </div>
+                </div>
+
+                <div className="settings-section">
+                    <div className="settings-section-heading">
+                        <div className="settings-section-icon">
+                            <FolderSync size={19} />
+                        </div>
+                        <div>
+                            <h2>NVIDIA App</h2>
+                            <p>
+                                Scan NVIDIA App screenshots and assign each game's name from its folder.
+                            </p>
+                        </div>
+                    </div>
+
+                    <div className="watched-folders-header">
+                        <div>
+                            <h3>ScreenShots Folder</h3>
+                            <p>Select the NVIDIA App ScreenShots folder that contains folders named after games.</p>
+                        </div>
+                        <div className="watched-folder-actions">
+                            <button
+                                className="settings-add-button"
+                                onClick={handleAddNvidiaFolder}
+                                disabled={adding}
+                            >
+                                <FolderPlus size={16} />
+                                {adding ? "Selecting..." : "Add Folder"}
+                            </button>
+                        </div>
+                    </div>
+
+                    <div className="watched-folders-list">
+                        {loading ? (
+                            <div className="settings-empty">Loading folders...</div>
+                        ) : nvidiaFolders.length === 0 ? (
+                            <div className="settings-empty">
+                                <FolderSync size={24} />
+                                <span>No NVIDIA App folder added yet.</span>
+                                <span>Select the ScreenShots folder to import its game subfolders.</span>
+                            </div>
+                        ) : (
+                            nvidiaFolders.map((folder) => (
+                                <div className="watched-folder-item" key={folder.id}>
+                                    <div className="watched-folder-icon"><Folder size={19} /></div>
+                                    <div className="watched-folder-info">
+                                        <span className="watched-folder-name">
+                                            {folder.path.split(/[\\/]/).filter(Boolean).pop() || folder.path}
+                                        </span>
+                                        <span className="watched-folder-path">{folder.path}</span>
+                                    </div>
+                                    <button
+                                        className="watched-folder-delete"
+                                        onClick={() => handleDeleteNvidiaFolder(folder.id)}
+                                        title="Remove NVIDIA App folder"
                                         disabled={adding}
                                     >
                                         <Trash2 size={17} />

@@ -7,6 +7,7 @@ import { ScanSearch } from "lucide-react";
 import Sidebar from "../components/Sidebar";
 import Topbar from "../components/Topbar";
 import CreateAlbumModal from "../components/CreateAlbumModal";
+import WindowTitleBar from "../components/WindowTitleBar";
 
 import {
     createAlbum,
@@ -16,9 +17,14 @@ import {
     getGames,
     initializeDatabase,
     getWatchedFolders,
+    getNvidiaWatchedFolders,
     getScreenshotHashes,
-    saveScreenshot,
+    getScannedFiles,
+    persistScanResult,
     type AlbumRecord,
+    type ImportedScreenshot,
+    type ScannedFileRecord,
+    type ScreenshotGameUpdate,
 } from "../lib/database";
 
 type Props = {
@@ -31,12 +37,10 @@ type Props = {
     }) => ReactNode;
 };
 
-type ImportedScreenshot = {
-    thumbnail_path: string;
-    id: string;
-    file_name: string;
-    file_path: string;
-    content_hash: string;
+type ScanResult = {
+    imported: ImportedScreenshot[];
+    scanned_files: ScannedFileRecord[];
+    game_updates: ScreenshotGameUpdate[];
 };
 
 export default function MainLayout({ children }: Props) {
@@ -75,24 +79,28 @@ export default function MainLayout({ children }: Props) {
             try {
                 await initializeDatabase();
 
-                const folders = await getWatchedFolders();
+                const [folders, nvidiaFolders] = await Promise.all([
+                    getWatchedFolders(),
+                    getNvidiaWatchedFolders(),
+                ]);
 
-                if (folders.length > 0) {
-                    const existingHashes = await getScreenshotHashes();
-
-                    const imported = await invoke<ImportedScreenshot[]>(
+                if (folders.length > 0 || nvidiaFolders.length > 0) {
+                    const [existingHashes, cachedFiles] = await Promise.all([
+                        getScreenshotHashes(),
+                        getScannedFiles(),
+                    ]);
+                    const result = await invoke<ScanResult>(
                         "scan_watched_folders",
                         {
                             folders: folders.map((folder) => folder.path),
+                            nvidiaFolders: nvidiaFolders.map((folder) => folder.path),
                             existingHashes,
+                            cachedFiles,
                         }
                     );
 
-                    for (const screenshot of imported) {
-                        await saveScreenshot(screenshot);
-                    }
-
-                    if (imported.length > 0) {
+                    await persistScanResult(result);
+                    if (result.imported.length > 0 || result.game_updates.length > 0) {
                         setRefreshKey((current) => current + 1);
                     }
                 }
@@ -147,58 +155,59 @@ export default function MainLayout({ children }: Props) {
     };
 
     return (
-        <div className="app-shell">
-            <Sidebar
-                active={active}
-                onChange={setActive}
-                onCreateAlbum={() => setIsAlbumModalOpen(true)}
-                albums={albums}
-                games={games}
-                onDeleteAlbum={handleDeleteAlbum}
-                onDeleteGame={handleDeleteGame}
-            />
+        <div className="window-shell">
+            <WindowTitleBar />
+            <div className="app-shell">
+                <Sidebar
+                    active={active}
+                    onChange={setActive}
+                    onCreateAlbum={() => setIsAlbumModalOpen(true)}
+                    albums={albums}
+                    games={games}
+                    onDeleteAlbum={handleDeleteAlbum}
+                    onDeleteGame={handleDeleteGame}
+                />
 
-            <main className="main-content">
-                <Topbar onImported={handleImported} />
+                <main className="main-content">
+                    <Topbar onImported={handleImported} />
 
-                {children({
-                    active,
-                    query,
-                    refreshKey,
-                    refreshSidebar: loadSidebarData,
-                    onImported: handleImported,
-                })}
-            </main>
+                    {children({
+                        active,
+                        query,
+                        refreshKey,
+                        refreshSidebar: loadSidebarData,
+                        onImported: handleImported,
+                    })}
+                </main>
 
-            <CreateAlbumModal
-                open={isAlbumModalOpen}
-                onClose={() => setIsAlbumModalOpen(false)}
-                onCreate={handleCreateAlbum}
-            />
+                <CreateAlbumModal
+                    open={isAlbumModalOpen}
+                    onClose={() => setIsAlbumModalOpen(false)}
+                    onCreate={handleCreateAlbum}
+                />
 
-            {isInitializing && (
-                <div className="archive-loading-overlay">
-                    <div className="archive-loading-modal">
-                        <div className="archive-loading-logo">
-                            <ScanSearch size={30} />
+                {isInitializing && (
+                    <div className="archive-loading-overlay">
+                        <div className="archive-loading-modal">
+                            <div className="archive-loading-logo">
+                                <ScanSearch size={30} />
+                            </div>
+
+                            <h2>Preparing your archive</h2>
+
+                            <p>
+                                Scanning folders and importing new screenshots...
+                            </p>
+
+                            <div className="archive-loading-progress">
+                                <div className="archive-loading-progress-bar" />
+                            </div>
+
+                            <span>This may take a moment</span>
                         </div>
-
-                        <h2>Preparing your archive</h2>
-
-                        <p>
-                            Scanning folders and importing new screenshots...
-                        </p>
-
-                        <div className="archive-loading-progress">
-                            <div className="archive-loading-progress-bar" />
-                        </div>
-
-                        <span>
-                            This may take a moment
-                        </span>
                     </div>
-                </div>
-            )}
+                )}
+            </div>
         </div>
     );
 }

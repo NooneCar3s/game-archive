@@ -2769,3 +2769,140 @@
         opacity: 1;
     }
 }
+
+/* Custom desktop title bar and app viewport sizing */
+.window-shell {
+  display: flex;
+  flex-direction: column;
+  width: 100vw;
+  height: 100vh;
+  min-width: 980px;
+  min-height: 680px;
+  overflow: hidden;
+  background: #101113;
+}
+
+.window-titlebar {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  flex: 0 0 40px;
+  height: 40px;
+  padding-left: 17px;
+  color: #aaa8b2;
+  background: #151519;
+  border-bottom: 1px solid rgba(255, 255, 255, 0.055);
+  user-select: none;
+  -webkit-app-region: drag;
+}
+
+.window-titlebar-brand {
+  display: flex;
+  align-items: center;
+  gap: 9px;
+  color: #aaa8b2;
+  font-size: 10px;
+  font-weight: 700;
+  letter-spacing: 0.13em;
+}
+
+.window-titlebar-mark {
+  display: grid;
+  place-items: center;
+  width: 22px;
+  height: 22px;
+  color: #ff9fc5;
+  background: rgba(220, 91, 142, 0.13);
+  border: 1px solid rgba(220, 91, 142, 0.22);
+  border-radius: 7px;
+  font-size: 11px;
+}
+
+.window-titlebar-controls {
+  display: flex;
+  align-self: stretch;
+  -webkit-app-region: no-drag;
+}
+
+.window-control-button {
+  display: grid;
+  place-items: center;
+  width: 48px;
+  height: 39px;
+  padding: 0;
+  color: #aaa8b2;
+  background: transparent;
+  border: 0;
+  border-radius: 0;
+  transition: background 0.15s ease, color 0.15s ease;
+  -webkit-app-region: no-drag;
+}
+
+.window-control-button:hover {
+  color: white;
+  background: rgba(255, 255, 255, 0.09);
+}
+
+.window-control-close:hover {
+  color: white;
+  background: #c54250;
+}
+
+.app-shell {
+  flex: 1;
+  min-height: 0;
+  height: auto;
+}
+
+/* Scroll the settings page inside the app instead of clipping its sections. */
+.settings-page {
+  flex: 1;
+  min-height: 0;
+  overflow-x: hidden;
+  overflow-y: auto;
+  overscroll-behavior: contain;
+  scrollbar-width: thin;
+  scrollbar-color: #45454d transparent;
+}
+
+.settings-page::-webkit-scrollbar {
+  width: 6px;
+}
+
+.settings-page::-webkit-scrollbar-thumb {
+  background: #45454d;
+  border-radius: 10px;
+}
+
+/* Use nearly all available space for the screenshot and keep controls visible. */
+.viewer-backdrop {
+  padding: 6px;
+}
+
+.viewer-window {
+  width: min(99vw, 2200px);
+  height: min(99vh, 1700px);
+  border-radius: 10px;
+}
+
+.viewer-topbar {
+  height: 48px;
+  min-height: 48px;
+  padding: 0 14px;
+}
+
+.viewer-image-area {
+  margin: 5px 8px;
+  border-radius: 6px;
+}
+
+.viewer-nav {
+  opacity: 0.78;
+  transform: translateY(-50%) scale(0.96);
+}
+
+.viewer-footer {
+  height: 48px;
+  min-height: 48px;
+  padding: 0 14px;
+}

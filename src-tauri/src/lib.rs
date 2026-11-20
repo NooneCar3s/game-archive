@@ -2,9 +2,9 @@ use image::ImageReader;
 use image::imageops::FilterType;
 use serde::Serialize;
 use sha2::{Digest, Sha256};
-use std::collections::HashSet;
+use std::collections::{HashMap, HashSet};
 use std::fs;
-use std::io::BufWriter;
+use std::io::{BufWriter, Read};
 use std::path::Path;
 use tauri::{AppHandle, Manager};
 use uuid::Uuid;
@@ -16,6 +16,29 @@ struct ImportedScreenshot {
     file_path: String,
     thumbnail_path: String,
     content_hash: String,
+    game: Option<String>,
+}
+
+#[derive(Clone, Serialize, serde::Deserialize)]
+struct ScannedFile {
+    source_path: String,
+    size_bytes: String,
+    modified_ns: String,
+    content_hash: String,
+    game: Option<String>,
+}
+
+#[derive(Serialize)]
+struct ScreenshotGameUpdate {
+    content_hash: String,
+    game: String,
+}
+
+#[derive(Serialize)]
+struct ScanResult {
+    imported: Vec<ImportedScreenshot>,
+    scanned_files: Vec<ScannedFile>,
+    game_updates: Vec<ScreenshotGameUpdate>,
 }
 
 fn create_thumbnail(source: &Path, thumbnails_dir: &Path, id: &str) -> Result<String, String> {
@@ -55,11 +78,45 @@ fn supported_image(path: &Path) -> bool {
 }
 
 fn calculate_hash(path: &Path) -> Result<String, String> {
-    let contents = fs::read(path).map_err(|e| format!("Failed to read image: {e}"))?;
+    let file = fs::File::open(path).map_err(|e| format!("Failed to read image: {e}"))?;
+    let mut reader = std::io::BufReader::new(file);
+    let mut hasher = Sha256::new();
+    let mut buffer = [0; 64 * 1024];
 
-    let hash = Sha256::digest(&contents);
+    loop {
+        let bytes_read = reader
+            .read(&mut buffer)
+            .map_err(|e| format!("Failed to read image: {e}"))?;
+        if bytes_read == 0 {
+            break;
+        }
+        hasher.update(&buffer[..bytes_read]);
+    }
 
-    Ok(format!("{:x}", hash))
+    Ok(format!("{:x}", hasher.finalize()))
+}
+
+fn file_fingerprint(path: &Path) -> Result<(String, String), String> {
+    let metadata = fs::metadata(path).map_err(|e| format!("Failed to read file metadata: {e}"))?;
+    let modified_ns = metadata
+        .modified()
+        .map_err(|e| format!("Failed to read file modification time: {e}"))?
+        .duration_since(std::time::UNIX_EPOCH)
+        .map_err(|e| format!("Invalid file modification time: {e}"))?
+        .as_nanos()
+        .to_string();
+
+    Ok((metadata.len().to_string(), modified_ns))
+}
+
+fn game_for_nvidia_path(root: &Path, image_path: &Path) -> Option<String> {
+    let relative_path = image_path.strip_prefix(root).ok()?;
+    let mut components = relative_path.components();
+    let game_folder = components.next()?.as_os_str().to_str()?;
+    // A file directly inside ScreenShots has no game folder to infer from.
+    components.next()?;
+    let game = game_folder.trim();
+    (!game.is_empty()).then(|| game.to_string())
 }
 
 fn import_image(
@@ -74,6 +131,24 @@ fn import_image(
 
     let content_hash = calculate_hash(source)?;
 
+    import_image_with_hash(
+        source,
+        images_dir,
+        thumbnails_dir,
+        known_hashes,
+        content_hash,
+        None,
+    )
+}
+
+fn import_image_with_hash(
+    source: &Path,
+    images_dir: &Path,
+    thumbnails_dir: &Path,
+    known_hashes: &mut HashSet<String>,
+    content_hash: String,
+    game: Option<String>,
+) -> Result<Option<ImportedScreenshot>, String> {
     if !known_hashes.insert(content_hash.clone()) {
         return Ok(None);
     }
@@ -113,6 +188,7 @@ fn import_image(
         file_path: destination.to_string_lossy().to_string(),
         thumbnail_path,
         content_hash,
+        game,
     }))
 }
 
@@ -153,7 +229,12 @@ fn scan_directory(
     images_dir: &Path,
     thumbnails_dir: &Path,
     known_hashes: &mut HashSet<String>,
+    cached_files: &HashMap<String, ScannedFile>,
+    scanned_files: &mut Vec<ScannedFile>,
+    game_updates: &mut Vec<ScreenshotGameUpdate>,
     imported: &mut Vec<ImportedScreenshot>,
+    assign_game_from_folder: bool,
+    root: &Path,
 ) {
     let entries = match fs::read_dir(directory) {
         Ok(entries) => entries,
@@ -179,12 +260,101 @@ fn scan_directory(
             let is_thumbnails_dir = path.canonicalize().ok() == thumbnails_dir.canonicalize().ok();
 
             if !is_images_dir && !is_thumbnails_dir {
-                scan_directory(&path, images_dir, thumbnails_dir, known_hashes, imported);
+                scan_directory(
+                    &path,
+                    images_dir,
+                    thumbnails_dir,
+                    known_hashes,
+                    cached_files,
+                    scanned_files,
+                    game_updates,
+                    imported,
+                    assign_game_from_folder,
+                    root,
+                );
             }
         } else if file_type.is_file() {
-            match import_image(&path, images_dir, thumbnails_dir, known_hashes) {
-                Ok(Some(screenshot)) => imported.push(screenshot),
-                Ok(None) => {}
+            if !supported_image(&path) {
+                continue;
+            }
+            let source_path = path.to_string_lossy().to_string();
+            let game = if assign_game_from_folder {
+                game_for_nvidia_path(root, &path)
+            } else {
+                None
+            };
+            let (size_bytes, modified_ns) = match file_fingerprint(&path) {
+                Ok(fingerprint) => fingerprint,
+                Err(error) => {
+                    eprintln!("{error}");
+                    continue;
+                }
+            };
+            if let Some(cached) = cached_files.get(&source_path).filter(|cached| {
+                cached.size_bytes == size_bytes && cached.modified_ns == modified_ns
+            }) {
+                // A regular watched folder must not erase an NVIDIA game
+                // assignment if the same root is configured in both lists.
+                if cached.game == game || (!assign_game_from_folder && cached.game.is_some()) {
+                    continue;
+                }
+                if let Some(game_name) = game.as_ref() {
+                    game_updates.push(ScreenshotGameUpdate {
+                        content_hash: cached.content_hash.clone(),
+                        game: game_name.clone(),
+                    });
+                }
+                scanned_files.push(ScannedFile {
+                    source_path,
+                    size_bytes,
+                    modified_ns,
+                    content_hash: cached.content_hash.clone(),
+                    game,
+                });
+                continue;
+            }
+            let content_hash = match calculate_hash(&path) {
+                Ok(hash) => hash,
+                Err(error) => {
+                    eprintln!("{error}");
+                    continue;
+                }
+            };
+            if known_hashes.contains(&content_hash) {
+                if let Some(game_name) = game.as_ref() {
+                    game_updates.push(ScreenshotGameUpdate {
+                        content_hash: content_hash.clone(),
+                        game: game_name.clone(),
+                    });
+                }
+                scanned_files.push(ScannedFile {
+                    source_path,
+                    size_bytes,
+                    modified_ns,
+                    content_hash,
+                    game,
+                });
+                continue;
+            }
+            match import_image_with_hash(
+                &path,
+                images_dir,
+                thumbnails_dir,
+                known_hashes,
+                content_hash,
+                game.clone(),
+            ) {
+                Ok(Some(screenshot)) => {
+                    scanned_files.push(ScannedFile {
+                        source_path,
+                        size_bytes,
+                        modified_ns,
+                        content_hash: screenshot.content_hash.clone(),
+                        game,
+                    });
+                    imported.push(screenshot);
+                }
+                Ok(None) => unreachable!("new content hash was inserted before import"),
                 Err(error) => eprintln!("{error}"),
             }
         }
@@ -195,8 +365,10 @@ fn scan_directory(
 async fn scan_watched_folders(
     app: AppHandle,
     folders: Vec<String>,
+    nvidia_folders: Vec<String>,
     existing_hashes: Vec<String>,
-) -> Result<Vec<ImportedScreenshot>, String> {
+    cached_files: Vec<ScannedFile>,
+) -> Result<ScanResult, String> {
     let app_data_dir = app.path().app_data_dir().map_err(|e| e.to_string())?;
 
     let images_dir = app_data_dir.join("images");
@@ -208,7 +380,13 @@ async fn scan_watched_folders(
         .map_err(|e| format!("Failed to create thumbnails folder: {e}"))?;
 
     let mut known_hashes: HashSet<String> = existing_hashes.into_iter().collect();
+    let cached_files: HashMap<String, ScannedFile> = cached_files
+        .into_iter()
+        .map(|file| (file.source_path.clone(), file))
+        .collect();
     let mut imported = Vec::new();
+    let mut scanned_files = Vec::new();
+    let mut game_updates = Vec::new();
 
     for folder in folders {
         let directory = Path::new(&folder);
@@ -222,11 +400,40 @@ async fn scan_watched_folders(
             &images_dir,
             &thumbnails_dir,
             &mut known_hashes,
+            &cached_files,
+            &mut scanned_files,
+            &mut game_updates,
             &mut imported,
+            false,
+            directory,
         );
     }
 
-    Ok(imported)
+    for folder in nvidia_folders {
+        let directory = Path::new(&folder);
+        if !directory.is_dir() {
+            continue;
+        }
+
+        scan_directory(
+            directory,
+            &images_dir,
+            &thumbnails_dir,
+            &mut known_hashes,
+            &cached_files,
+            &mut scanned_files,
+            &mut game_updates,
+            &mut imported,
+            true,
+            directory,
+        );
+    }
+
+    Ok(ScanResult {
+        imported,
+        scanned_files,
+        game_updates,
+    })
 }
 
 #[tauri::command]

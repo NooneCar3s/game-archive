@@ -19,6 +19,7 @@ type ImportedScreenshot = {
     file_name: string;
     file_path: string;
     content_hash: string;
+    game: string | null;
 };
 
 export default function Topbar({ onImported }: TopbarProps) {
